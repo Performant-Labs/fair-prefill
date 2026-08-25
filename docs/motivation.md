@@ -1,6 +1,32 @@
 # Motivation
 
-Why this project exists, and the evidence behind it.
+Why this project existed, and the evidence behind it.
+
+> ## Superseded — the diagnosis below is wrong (2026-08-25)
+>
+> This page argued the bottleneck was vLLM's scheduler starving a second
+> concurrent request of the per-step token budget. Later measurement showed the
+> real constraint is **KV cache residency**, not scheduling.
+>
+> The KV cache holds ~139k tokens. Two agentic sessions each carrying ~100k of
+> context need ~200k, so each session's turn evicts the other's cached prefix and
+> the next turn recomputes its whole prompt from scratch at ~539 tok/s. Measured
+> on 195 contended production requests: only **4%** served from prefix cache, and
+> 78,788 tokens ÷ 539 tok/s = 146s against 153.9s observed — the arithmetic
+> closes. Uncontended requests complete a *larger* 106k-token prompt in 6.2s,
+> which at the measured throughput is only possible as a cache hit.
+>
+> So the "collision penalty" was never contention overhead. It was cache hit
+> versus full recompute.
+>
+> **The scheduler analysis below is still accurate as far as it goes** — the
+> greedy in-order walk is real, and the harness reproduced the symptom
+> faithfully. But the harness had no KV cache and no eviction, so it modelled the
+> wrong cause. Reproducing a symptom is not the same as reproducing its
+> mechanism, which is the main lesson worth taking from this project.
+>
+> See [alternatives-considered.md](alternatives-considered.md) for the corrected
+> picture and where the real lever is.
 
 ## The workload
 

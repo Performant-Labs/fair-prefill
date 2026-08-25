@@ -28,9 +28,32 @@ large prompts.
 > token**, matching the ~2× that work conservation predicts for the second of two
 > peers.
 >
-> **The remaining lever is capacity, not scheduling.** Raising
-> `max_num_batched_tokens` reduces the last finisher's completion time directly
-> and proportionally; reordering the same budget cannot.
+> ### Then the root cause turned out to be something else entirely
+>
+> Follow-up measurement (2026-08-25) showed the bottleneck was never the per-step
+> budget at all. It is **KV cache residency**.
+>
+> The cache holds ~139k tokens. Two agentic sessions each carrying ~100k of
+> context need ~200k, so each turn evicts the other session's cached prefix and
+> the next turn recomputes its entire prompt at ~539 tok/s. Across 195 contended
+> production requests: **4%** prefix-cache hit, and 78,788 tokens ÷ 539 tok/s =
+> 146s against 153.9s observed. Uncontended requests finish a *larger* 106k-token
+> prompt in 6.2s, which at that throughput is only possible as a cache hit.
+>
+> So the "collision penalty" was cache hit versus full recompute, not contention.
+> Raising `max_num_batched_tokens` is also not the lever — it was tried
+> (8192 → 12288 → 16384) with no demonstrable TTFT improvement.
+>
+> **The real lever is keeping prefixes resident**: KV offload to host RAM, a
+> smaller `max_model_len`, or less per-session context.
+>
+> ### The lesson worth keeping
+>
+> The harness reproduced production's symptom exactly — same `running=1,
+> waiting=1` signature, same starvation pattern. That was convincing, and it was
+> measuring the wrong thing: it had no KV cache and no eviction, so it could not
+> have shown the real cause. **Reproducing a symptom is not reproducing its
+> mechanism.**
 >
 > The code here is a working `--scheduler-cls` plugin and a GPU-free harness that
 > drives vLLM's real scheduler. Both are kept because the harness is reusable and

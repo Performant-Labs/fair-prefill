@@ -49,19 +49,25 @@ out to be the problem rather than the static value, that result gets recorded he
 failure. Splitting only helps while the shares stay large enough that per-step overhead
 does not dominate, which is why the allocation policy needs a floor.
 
-### Prefix caching — rejected, negligible effect
+### Prefix caching — **this rejection was wrong**
 
-Expected to help, since a growing conversation resends mostly-unchanged history.
+Originally recorded as: "single-digit-percent cache hit rate, effectively no benefit,"
+on the reasoning that two independent agentic sessions share little literal prefix.
 
-**Result: single-digit-percent cache hit rate.** Effectively no benefit.
+**That was a measurement error, and it mattered.** The 4.48% figure was taken roughly 45
+minutes after a backend restart, before the cache had warmed. Measured over multi-hour
+windows the real hit rate is **44.8–74.0%**. Prefix caching works very well here — a
+turn that hits it completes a 106k-token prompt in about 6 seconds instead of ~150.
 
-**Why.** Prefix caching requires a shared *literal prefix*. Two independent agentic
-sessions diverge almost immediately — different tool outputs, different file contents,
-different timestamps — so there is very little reusable prefix either within or across
-sessions. The mechanism suits shared system prompts or templated RAG traffic across many
-short-lived requests, not two long uniquely-evolving conversations.
+The correct statement is narrower and far more important: the hit rate is **4% for
+contended requests** specifically. Caching works right up until a concurrent session
+evicts it. Two sessions each carrying ~100k of context need ~200k of KV; the cache holds
+~139k. They do not fit, so they evict each other.
 
-Left enabled (it is the default and does no harm), but it is not a fix.
+**This is the actual root cause of the whole problem**, and treating prefix caching as a
+dead end delayed finding it. The lever is keeping those prefixes resident — see
+"KV cache offload" below, which is no longer a speculative extra but the leading
+candidate.
 
 ### `--scheduling-policy priority` — rejected, source-verified inapplicable
 
@@ -212,7 +218,7 @@ share the GPU.
 **Not rejected on principle** — it composes with fair-share scheduling and could be
 revisited later. It is simply not a substitute for fixing the scheduler.
 
-### KV cache offload (e.g. LMCache) — untried, plausible, different axis
+### KV cache offload (e.g. LMCache) — **now the leading candidate**
 
 Offload an idle peer's KV cache to host memory and restore it when its turn returns,
 avoiding recompute. A third-party benchmark on very different (large multi-GPU) hardware
@@ -224,8 +230,13 @@ fp8 KV cache and speculative decoding. Attacks a genuinely different cost (recom
 turn resumption) than fair-share (contention during overlap), so the two are
 complementary rather than competing.
 
-Recorded as the most promising *untried* lever if fair-share scheduling proves
-insufficient.
+**Promoted from "interesting extra" to leading candidate**, because it attacks the
+mechanism now known to be responsible. The problem is that an idle session's cached
+prefix gets evicted by the active session, forcing a full recompute when its turn
+returns. Offloading that KV to host RAM instead of discarding it targets exactly that.
+
+Two sibling levers on the same axis, both cheaper to try: reducing `max_model_len` so
+more contexts fit in the same cache, and reducing per-session context size on the client.
 
 ---
 
@@ -233,8 +244,8 @@ insufficient.
 
 | Approach | Status | Reason |
 |---|---|---|
-| `long_prefill_token_threshold` | Rejected | Measured worse; wrong workload shape |
-| Prefix caching | Kept, ineffective | Negligible hit rate; no shared prefixes |
+| `long_prefill_token_threshold` | Rejected | Measured worse; targets a bottleneck that was not the real one |
+| Prefix caching | **Rejection was WRONG** | Real hit rate 44.8–74.0%, not 4.48%. Works until contention evicts it — which turned out to be the actual root cause |
 | `--scheduling-policy priority` | Rejected | Source-verified: never engages here |
 | Raise `max_num_batched_tokens` | **Adopted, partial** | Helps, but decays via entrainment; memory-bounded |
 | Disaggregated prefill/decode | Unavailable | Requires ≥2 GPUs |
@@ -246,6 +257,7 @@ insufficient.
 | IPEX-LLM | Rejected | Insufficient evidence for this combination |
 | OpenVINO MS/GenAI | Rejected | No fairness advantage; migration cost |
 | Blind client-side jitter | Rejected | Simulated worse at every magnitude |
-| Targeted admission control | Deferred | ~low single digit %; composes with this project |
-| KV cache offload | Untried | Different axis; complementary; most promising untried lever |
-| **Custom `--scheduler-cls`** | **Chosen** | Only path preserving XPU + GPTQ-Int4 + speculative decoding |
+| Targeted admission control | Deferred | ~low single digit %; may matter more now, since serialising sessions would also stop them evicting each other |
+| **KV cache offload** | **Leading candidate** | Attacks KV residency, the mechanism now known to be responsible |
+| Reduce `max_model_len` | Untried, cheap | Same axis: more contexts fit in the same cache |
+| Custom `--scheduler-cls` | **Abandoned** | Refuted twice over — cannot help equal peers, and scheduling was never the bottleneck |
