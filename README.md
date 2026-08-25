@@ -7,6 +7,14 @@ prefill monopolize it.
 > **Status: design / not yet implemented.** See the
 > [epic](https://github.com/Performant-Labs/fair-prefill/issues/1) for the plan.
 
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [docs/motivation.md](docs/motivation.md) | The workload, the scheduler mechanism that starves it, and the entrainment finding that makes collision *cost* — not frequency — the thing to fix |
+| [docs/alternatives-considered.md](docs/alternatives-considered.md) | Every other approach evaluated and why it was rejected: config knobs, multi-GPU architectures, alternative serving frameworks, client-side admission control |
+| [docs/measurement.md](docs/measurement.md) | How a change is judged to have worked, and the seven rules derived from prior false-positive results |
+
 ## The problem
 
 vLLM V1's scheduler walks its running queue in FCFS order each step, allocating
