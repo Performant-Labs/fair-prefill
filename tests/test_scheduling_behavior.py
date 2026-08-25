@@ -193,6 +193,115 @@ def test_fair_share_pays_off_only_with_size_asymmetry(big, small, fair_should_wi
 
 
 # --------------------------------------------------------------------------
+# Policy comparison: is any reordering better?
+# --------------------------------------------------------------------------
+
+
+def _srpt_hook(h):
+    """Shortest-remaining-processing-time: serve the request closest to done.
+
+    Implemented by reordering the running list, since the greedy walk consumes
+    the budget in list order. SRPT is classically optimal for mean flow time,
+    which makes it the strongest realistic alternative to equal-split.
+    """
+
+    def hook(sched):
+        def remaining(r):
+            left = r.num_prompt_tokens - r.num_computed_tokens
+            return left if left > 0 else 10**9
+
+        sched.running.sort(key=remaining)
+        sched.scheduler_config.long_prefill_token_threshold = 0
+
+    return hook
+
+
+def _completion_steps(h, sizes, hook, stagger=0):
+    from tests.v1.core.utils import create_requests
+
+    sched = h.build_scheduler()
+    reqs = [
+        create_requests(
+            1, num_tokens=n, block_size=16, max_tokens=8, req_ids=[f"r{i}"]
+        )[0]
+        for i, n in enumerate(sizes)
+    ]
+    sched.add_request(reqs[0])
+    timeline = h.drive(sched, stagger, before_step=hook) if stagger else []
+    for r in reqs[1:]:
+        sched.add_request(r)
+    timeline += h.drive(sched, 60, before_step=hook)
+    return [
+        h.steps_until_prefill_done(timeline, f"r{i}", n) for i, n in enumerate(sizes)
+    ]
+
+
+def test_srpt_is_indistinguishable_from_fcfs():
+    """SRPT buys nothing over stock in any scenario tested.
+
+    With equal-sized requests SRPT degenerates to FCFS (all remaining times are
+    equal, so the ordering never changes). In the asymmetric case vLLM's arrival
+    order already happens to be favourable, so it matches there too.
+
+    Measured, as [r0, r1] completion steps: equal peers 1600/1600 -> [7, 13] for
+    both FCFS and SRPT; staggered -> [7, 13] both; asymmetric 1600/400 ->
+    [7, 8] both; three peers -> [7, 13, 19] both.
+
+    This closes off "a smarter reordering would fix it": the classically optimal
+    policy for mean flow time is already what the stock scheduler does here.
+    """
+    h = _harness()
+    for sizes, stagger in (
+        ((1600, 1600), 0),
+        ((1600, 1600), 3),
+        ((1600, 400), 0),
+        ((1600, 1600, 1600), 0),
+    ):
+        fcfs = _completion_steps(h, sizes, None, stagger)
+        srpt = _completion_steps(h, sizes, _srpt_hook(h), stagger)
+        assert fcfs == srpt, f"sizes={sizes} stagger={stagger}: {fcfs} vs {srpt}"
+
+
+def test_worst_case_completion_is_policy_invariant():
+    """No policy improves the WORST completion step -- only the best ones.
+
+    This is the sharpest form of the negative result, and it matters because
+    "fair-share reduces tail latency" is the most appealing remaining argument
+    for the approach. It does reduce variance, but entirely by making good
+    outcomes worse, never by making the bad outcome better.
+
+    Measured worst-case completion step:
+
+        equal peers   FCFS 13   equal-split 13   SRPT 13
+        staggered     FCFS 13   equal-split 13   SRPT 13
+        three peers   FCFS 19   equal-split 19   SRPT 19
+
+    Three peers is the starkest: FCFS yields [7, 13, 19], equal-split [19, 19,
+    19]. Mean degrades 13 -> 19 while the worst case does not move at all. Fair
+    sharing converted "one turn in three is fast" into "every turn is the
+    slowest case".
+    """
+    h = _harness()
+    for sizes, stagger in (
+        ((1600, 1600), 0),
+        ((1600, 1600), 3),
+        ((1600, 1600, 1600), 0),
+    ):
+        worst = {
+            name: max(_completion_steps(h, sizes, hook, stagger))
+            for name, hook in (
+                ("fcfs", None),
+                ("equal", _fair_share_hook(h, h.BUDGET)),
+                ("srpt", _srpt_hook(h)),
+            )
+        }
+        assert len(set(worst.values())) == 1, (
+            f"sizes={sizes} stagger={stagger}: worst case differs across "
+            f"policies: {worst}"
+        )
+
+
+# --------------------------------------------------------------------------
 # Guards on the harness itself
 # --------------------------------------------------------------------------
 
