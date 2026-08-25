@@ -1,11 +1,42 @@
 # fair-prefill
 
-A pluggable scheduler for vLLM V1 that fair-shares the per-step token budget
-across concurrently **prefilling** requests, instead of letting one large
-prefill monopolize it.
+An investigation into whether fair-sharing vLLM V1's per-step token budget
+across concurrently prefilling requests can help when two clients each send very
+large prompts.
 
-> **Status: design / not yet implemented.** See the
-> [epic](https://github.com/Performant-Labs/fair-prefill/issues/1) for the plan.
+> ## Status: not pursued — the premise was tested and refuted
+>
+> **Fair-sharing the per-step token budget cannot help the request that finishes
+> last.** Total prefill work is conserved, so the last finisher is bound by total
+> work rather than by scheduling order. Sharing only delays the *first* finisher.
+>
+> Measured, two equal prompts: stock finishes at steps 7 and 13; fair-share at 13
+> and 13. The starved request gains nothing. This held at every arrival stagger
+> tested, and with three peers it is worse — stock `[7, 13, 19]` versus
+> fair-share `[19, 19, 19]`.
+>
+> Four separate arguments for the approach were each tested and refuted:
+>
+> | Argument | Result |
+> |---|---|
+> | Equal-split helps the starved request | No — last finisher unchanged |
+> | SRPT would do better | No — identical to stock in every scenario |
+> | It cuts tail latency | No — **worst case is invariant** across all policies; variance falls only because good outcomes get worse |
+> | It protects a concurrent decode client | No — decode served in 20/20 steps under both; it is never starved |
+>
+> Production data agrees: the median collision penalty is **2.10× per input
+> token**, matching the ~2× that work conservation predicts for the second of two
+> peers.
+>
+> **The remaining lever is capacity, not scheduling.** Raising
+> `max_num_batched_tokens` reduces the last finisher's completion time directly
+> and proportionally; reordering the same budget cannot.
+>
+> The code here is a working `--scheduler-cls` plugin and a GPU-free harness that
+> drives vLLM's real scheduler. Both are kept because the harness is reusable and
+> the negative result is worth being able to reproduce. See
+> [#1](https://github.com/Performant-Labs/fair-prefill/issues/1) for the full
+> test series.
 
 ## Motivation
 
