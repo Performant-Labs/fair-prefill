@@ -93,6 +93,17 @@ evidence. The `--scheduling-policy priority` rejection in
 [alternatives-considered.md](alternatives-considered.md) is a direct product of this rule
 — it looked correct in the docs and was ruled out only by reading the code.
 
+**Absence of a signal is not a signal.** A related failure: this project was initially
+planned around the belief that the deployment ran the base `Scheduler`, because
+`--async-scheduling` was not passed and no log line mentioned it. Both observations were
+worthless. `async_scheduling=None` means *auto-decide*, and vLLM's resolution logs a
+warning on every path that **disables** it while logging nothing when it **enables** it —
+so silence in the logs is exactly what an enabled deployment looks like. Resolving the
+real engine config showed async scheduling had been on the whole time.
+
+When a check comes back empty, establish that the check would have produced output had
+the thing been true, before concluding anything from the emptiness.
+
 ## Rule 7 — report negative results plainly
 
 Three mitigations were tested and rejected on measurements before this project started.

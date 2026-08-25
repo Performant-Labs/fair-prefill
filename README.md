@@ -46,7 +46,10 @@ decode-phase requests their normal small allocation.
   This project pins to a specific vLLM version and treats every upgrade as a re-audit.
 - A custom scheduler must subclass **`AsyncScheduler`**, not the base `Scheduler` —
   vLLM's own warning states that subclassing `Scheduler` disables async scheduling and
-  degrades performance.
+  degrades performance. Note that `async_scheduling=None` means *auto-decide*, not
+  *off*: vLLM enables it unless an incompatibility applies, so many deployments are
+  already running `AsyncScheduler` without ever passing the flag. Resolve the actual
+  engine config to find out rather than inferring from the command line.
 - Overriding `schedule()` means carrying a copy of a large, stateful method that must be
   diffed against upstream on every version bump.
 
