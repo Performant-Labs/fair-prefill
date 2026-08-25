@@ -32,9 +32,22 @@ large one, capping the large one lets the small ones slip through, which is a re
 With two large peers, there are no small requests to slip through — capping just
 lengthens the contention window.
 
-**Warning for the design in #9:** an overly aggressive fair-share split can reproduce
-exactly this failure. Splitting is only beneficial while the shares remain large enough
-that per-step overhead does not dominate.
+**Important reframing — the mechanism may be right, the value was wrong.** A static
+threshold applies even when a request is running **alone**, so an uncontended prefill was
+stretched across several times more steps than necessary for no benefit at all. "Full
+budget when uncontended, split when contended" is exactly what a fixed value cannot
+express.
+
+That observation is the basis of [issue #14](https://github.com/Performant-Labs/fair-prefill/issues/14):
+if the threshold is set *dynamically per step* — to roughly the per-step budget divided
+by the number of actively prefilling requests — it may deliver fair-share directly, with
+no need to override `schedule()` at all. That would remove this project's largest
+maintenance liability. The spike will confirm or kill it; if the mechanism itself turns
+out to be the problem rather than the static value, that result gets recorded here.
+
+**Warning for the design in #9:** an overly aggressive split can still reproduce this
+failure. Splitting only helps while the shares stay large enough that per-step overhead
+does not dominate, which is why the allocation policy needs a floor.
 
 ### Prefix caching — rejected, negligible effect
 
