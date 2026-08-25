@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fair-prefill"
+version = "0.0.1"
+description = "A pluggable vLLM V1 scheduler that fair-shares the per-step token budget across concurrently prefilling requests"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+# 3.12 is what the target vLLM serving image ships. Nothing here needs a
+# newer language feature; the floor exists so an environment that cannot run
+# inside the image fails at install time rather than at engine startup.
+requires-python = ">=3.12"
+authors = [{ name = "Performant Labs" }]
+keywords = ["vllm", "scheduler", "inference", "fairness"]
+classifiers = [
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# NOTE: vllm is deliberately NOT a runtime dependency.
+#
+# This package is loaded *inside* an existing vLLM serving image, whose vLLM
+# build is XPU-specific and not the one pip would resolve from PyPI. Declaring
+# it as a dependency risks pip installing a second, wrong vLLM over the image's
+# own. The dependency is real but environmental, and is enforced at import time
+# and by the version check in issue #8 instead.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://github.com/Performant-Labs/fair-prefill"
+Issues = "https://github.com/Performant-Labs/fair-prefill/issues"
+
+[tool.setuptools.packages.find]
+include = ["fair_prefill*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "requires_vllm: test needs a real vLLM install; skipped where vLLM is absent (e.g. CI)",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

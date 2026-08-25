@@ -39,6 +39,47 @@ The scheduler subclasses `AsyncScheduler` and overrides `schedule()` to divide t
 per-step token budget fairly among requests that are actively prefilling, while leaving
 decode-phase requests their normal small allocation.
 
+## Loading it into vLLM
+
+Pass the class by qualname:
+
+```
+--scheduler-cls fair_prefill.scheduler.FairPrefillScheduler
+```
+
+vLLM resolves that string with `resolve_obj_by_qualname()`, so **the package must be
+importable by the serving process** — the flag alone does nothing if the import fails.
+That string is user-facing configuration; renaming the module or class is a breaking
+change. `make qualname` prints the current value.
+
+Confirm vLLM actually resolved *your* class rather than silently falling back: on startup
+it logs a warning naming the configured scheduler. No warning means no custom scheduler.
+
+### Getting the package into the container
+
+**Development** — mount the source and put it on the path, so edits need only a restart,
+not an image rebuild:
+
+```bash
+docker run ... -v /path/to/fair-prefill:/fair-prefill:ro -e PYTHONPATH=/fair-prefill ...
+```
+
+**Release** — install into the image (`pip install fair-prefill`). Deferred to
+[#8](https://github.com/Performant-Labs/fair-prefill/issues/8).
+
+## Development
+
+```bash
+make check           # lint + tests, what CI runs
+make test            # pytest; vLLM-dependent tests skip when vLLM is absent
+make test-container  # full suite inside the serving image, vLLM present
+```
+
+`import fair_prefill` deliberately does **not** import vLLM, so packaging and metadata
+are testable without it. Only `fair_prefill.scheduler` requires vLLM; those tests are
+marked `requires_vllm` and skip elsewhere — the skip is reported in the run header, since
+a suite that silently tests nothing is worse than a failing one.
+
 ## Constraints
 
 - `SchedulerInterface` is explicitly **not a public API**; vLLM logs a warning when a
